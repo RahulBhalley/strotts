@@ -13,29 +13,43 @@ from vgg_pt import Vgg16_pt
 from pyr_lap import dec_lap_pyr, syn_lap_pyr
 from stylize_objectives import objective_class
 
-def style_transfer(stylized_im, content_im, style_path, output_path, scl, long_side, mask, 
-                   content_weight=0., use_guidance=False, regions=0, coords=0, lr=2e-3):
+from typing import Callable, List, Optional, Tuple
+
+def style_transfer(
+    stylized_im: torch.Tensor,
+    content_im: torch.Tensor,
+    style_path: str,
+    output_path: str,
+    scl: float,
+    long_side: int,
+    mask: torch.Tensor,
+    content_weight: float = 0.,
+    use_guidance: bool = False,
+    regions: Tuple[List[torch.Tensor], List[torch.Tensor]] = ([], []),
+    coords: Optional[torch.Tensor] = None,
+    lr: float = 2e-3
+) -> Tuple[torch.Tensor, float]:
     """
     Perform style transfer on the given content image using the specified style.
 
     Args:
-        stylized_im (torch.Tensor): Initial stylized image.
-        content_im (torch.Tensor): Content image.
-        style_path (str): Path to the style image or folder.
-        output_path (str): Path to save the output image.
-        scl (float): Scale factor for the output image.
-        long_side (int): Length of the long side of the image.
-        mask (torch.Tensor): Mask for region-based style transfer.
-        content_weight (float, optional): Weight for content loss. Defaults to 0.
-        use_guidance (bool, optional): Whether to use guided style transfer. Defaults to False.
-        regions (tuple, optional): Regions for region-based style transfer. Defaults to 0.
-        coords (torch.Tensor, optional): Coordinates for guided style transfer. Defaults to 0.
-        lr (float, optional): Learning rate for optimization. Defaults to 2e-3.
+        stylized_im: Initial stylized image.
+        content_im: Content image.
+        style_path: Path to the style image or folder.
+        output_path: Path to save the output image.
+        scl: Scale factor for the output image.
+        long_side: Length of the long side of the image.
+        mask: Mask for region-based style transfer.
+        content_weight: Weight for content loss.
+        use_guidance: Whether to use guided style transfer.
+        regions: Regions for region-based style transfer.
+        coords: Coordinates for guided style transfer.
+        lr: Learning rate for optimization.
 
     Returns:
-        tuple: A tuple containing:
-            - stylized_im (torch.Tensor): The final stylized image.
-            - ell (float): The final loss value.
+        A tuple containing:
+            - The final stylized image.
+            - The final loss value.
     """
     REPORT_INTERVAL = 100
     RESAMPLE_FREQ = 1
@@ -51,8 +65,8 @@ def style_transfer(stylized_im, content_im, style_path, output_path, scl, long_s
 
     # Define feature extractor
     cnn = utils.to_device(Vgg16_pt())
-    phi = lambda x: cnn.forward(x)
-    phi2 = lambda x, y, z: cnn.forward_cat(x, z, samps=y, forward_func=cnn.forward)
+    phi: Callable[[torch.Tensor], torch.Tensor] = lambda x: cnn.forward(x)
+    phi2: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor] = lambda x, y, z: cnn.forward_cat(x, z, samps=y, forward_func=cnn.forward)
 
     # Optimize over Laplacian pyramid instead of pixels directly
     if use_pyr:
@@ -72,7 +86,7 @@ def style_transfer(stylized_im, content_im, style_path, output_path, scl, long_s
     # Create objective object
     objective_wrapper = objective_class(objective='remd_dp_g')
 
-    z_s_all = []
+    z_s_all: List[torch.Tensor] = []
     for ri in range(len(regions[1])):
         z_s, _ = load_style_folder(phi2, paths, regions, ri, n_samps=-1, subsamps=1000, scale=long_side, inner=5)
         z_s_all.append(z_s)
