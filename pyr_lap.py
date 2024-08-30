@@ -1,31 +1,21 @@
 import torch
-from torch.autograd import Variable
 import torch.nn.functional as F
 
-def dec_lap_pyr(X,levs):
+def dec_lap_pyr(X, levs):
     pyr = []
     cur = X
-    for i in range(levs):
-        cur_x = cur.size(2)
-        cur_y = cur.size(3)
-
-        x_small = F.upsample_bilinear(cur, (max(cur_x//2,1), max(cur_y//2,1)))
-        x_back  = F.upsample_bilinear(x_small, (cur_x,cur_y))
+    for _ in range(levs):
+        cur_x, cur_y = cur.size(2), cur.size(3)
+        x_small = F.interpolate(cur, scale_factor=0.5, mode='bilinear', align_corners=False)
+        x_back = F.interpolate(x_small, size=(cur_x, cur_y), mode='bilinear', align_corners=False)
         lap = cur - x_back
         pyr.append(lap)
         cur = x_small
-
     pyr.append(cur)
-
     return pyr
 
 def syn_lap_pyr(pyr):
-
     cur = pyr[-1]
-    levs = len(pyr)
-    for i in range(0,levs-1)[::-1]:
-        up_x = pyr[i].size(2)
-        up_y = pyr[i].size(3)
-        cur = pyr[i] + F.upsample_bilinear(cur,(up_x,up_y))
-
+    for lap in reversed(pyr[:-1]):
+        cur = lap + F.interpolate(cur, size=(lap.size(2), lap.size(3)), mode='bilinear', align_corners=False)
     return cur
