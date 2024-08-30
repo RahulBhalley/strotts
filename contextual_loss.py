@@ -1,12 +1,8 @@
 import torch
-from torch.autograd import Variable
 import torch.nn.functional as F
-import numpy as np
-import time
 import utils
 
 def pairwise_distances_sq_l2(x, y):
-
     x_norm = (x**2).sum(1).view(-1, 1)
     y_t = torch.transpose(y, 0, 1)
     y_norm = (y**2).sum(1).view(1, -1)
@@ -17,7 +13,6 @@ def pairwise_distances_sq_l2(x, y):
 
 
 def pairwise_distances_cos(x, y):
-
     x_norm = torch.sqrt((x**2).sum(1).view(-1, 1))
     y_t = torch.transpose(y, 0, 1)
     y_norm = torch.sqrt((y**2).sum(1).view(1, -1))
@@ -26,26 +21,18 @@ def pairwise_distances_cos(x, y):
 
     return dist
 
-def get_DMat(X,Y,h=1.0,cb=0,splits=[128*3+256*3+512*4], cos_d=True):
-    n = X.size(0)
-    m = Y.size(0)
-    M = utils.to_device(Variable(torch.zeros(n,m)))
+def get_DMat(X, Y, h=1.0, cb=0, splits=[128*3+256*3+512*4], cos_d=True):
+    n, m = X.size(0), Y.size(0)
+    M = utils.to_device(torch.zeros(n, m))
 
-
-    if 1:
-        cb = 0
-        ce = 0
-        for i in range(len(splits)):
-            if cos_d:
-                ce = cb + splits[i]
-                M = M + pairwise_distances_cos(X[:,cb:ce],Y[:,cb:ce])
-            
-                cb = ce
-            else:
-                ce = cb + splits[i]
-                M = M + torch.sqrt(pairwise_distances_sq_l2(X[:,cb:ce],Y[:,cb:ce]))
-            
-                cb = ce
+    cb = 0
+    for split in splits:
+        ce = cb + split
+        if cos_d:
+            M += pairwise_distances_cos(X[:, cb:ce], Y[:, cb:ce])
+        else:
+            M += torch.sqrt(pairwise_distances_sq_l2(X[:, cb:ce], Y[:, cb:ce]))
+        cb = ce
 
     return M
 
@@ -74,37 +61,25 @@ def viz_d(zx,coords):
     viz = viz.data.cpu().numpy()[0,0,:,:]/len(zx)
     return vis_o
 
-def remd_loss(X,Y, h=None, cos_d=True, splits= [3+64+64+128+128+256+256+256+512+512],return_mat=False):
-
+def remd_loss(X, Y, h=None, cos_d=True, splits=[3+64+64+128+128+256+256+256+512+512], return_mat=False):
     d = X.size(1)
 
+    X = utils.rgb_to_yuv_pc(X.transpose(0, 1).contiguous().view(d, -1)).transpose(0, 1) if d == 3 else X.transpose(0, 1).contiguous().view(d, -1).transpose(0, 1)
+    Y = utils.rgb_to_yuv_pc(Y.transpose(0, 1).contiguous().view(d, -1)).transpose(0, 1) if d == 3 else Y.transpose(0, 1).contiguous().view(d, -1).transpose(0, 1)
 
-    if d == 3:
-        X = utils.rgb_to_yuv_pc(X.transpose(0,1).contiguous().view(d,-1)).transpose(0,1)
-        Y = utils.rgb_to_yuv_pc(Y.transpose(0,1).contiguous().view(d,-1)).transpose(0,1)
-
-    else:
-        X = X.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
-        Y = Y.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
-
-    #Relaxed EMD
-    CX_M = get_DMat(X,Y,1.,cos_d=cos_d, splits=splits)
+    CX_M = get_DMat(X, Y, 1., cos_d=cos_d, splits=splits)
     
     if return_mat:
         return CX_M
     
-    if d==3:
-        CX_M = CX_M+get_DMat(X,Y,1.,cos_d=False, splits=splits)
+    if d == 3:
+        CX_M += get_DMat(X, Y, 1., cos_d=False, splits=splits)
 
-    m1,m1_inds = CX_M.min(1)
-    m2,m2_inds = CX_M.min(0)
+    m1, m1_inds = CX_M.min(1)
+    m2, m2_inds = CX_M.min(0)
 
-    if m1.mean() > m2.mean():
-        used_style_feats = Y[m1_inds,:]
-    else:
-        used_style_feats = Y
-
-    remd = torch.max(m1.mean(),m2.mean())
+    used_style_feats = Y[m1_inds, :] if m1.mean() > m2.mean() else Y
+    remd = torch.max(m1.mean(), m2.mean())
 
     return remd, used_style_feats
 
@@ -160,42 +135,26 @@ def remd_loss_g(X,Y, GX, GY, h=1.0, splits= [3+64+64+128+128+256+256+256+512+512
     return remd, used_style_feats
 
 
-def moment_loss(X,Y,moments=[1,2]):
-
+def moment_loss(X, Y, moments=[1, 2]):
     d = X.size(1)
     ell = 0.
 
-    Xo = X.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
-    Yo = Y.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
+    Xo = X.transpose(0, 1).contiguous().view(d, -1).transpose(0, 1)
+    Yo = Y.transpose(0, 1).contiguous().view(d, -1).transpose(0, 1)
 
-    splits = [Xo.size(1)]
-
-    cb = 0
-    ce = 0
-    for i in range(len(splits)):
-        ce = cb + splits[i]
-        X = Xo[:,cb:ce]
-        Y = Yo[:,cb:ce]
-        cb = ce
-
-        mu_x = torch.mean(X,0,keepdim=True)
-        mu_y = torch.mean(Y,0,keepdim=True)
-        mu_d = torch.abs(mu_x-mu_y).mean()
-
-
+    for X, Y in zip(Xo.split(Xo.size(1), dim=1), Yo.split(Yo.size(1), dim=1)):
+        mu_x = torch.mean(X, 0, keepdim=True)
+        mu_y = torch.mean(Y, 0, keepdim=True)
+        mu_d = torch.abs(mu_x - mu_y).mean()
 
         if 1 in moments:
-            ell = ell + mu_d
-
+            ell += mu_d
 
         if 2 in moments:
-            sig_x = torch.mm((X-mu_x).transpose(0,1), (X-mu_x))/X.size(0)
-            sig_y = torch.mm((Y-mu_y).transpose(0,1), (Y-mu_y))/Y.size(0)
-
-
-            sig_d = torch.abs(sig_x-sig_y).mean()
-            ell = ell + sig_d
-
+            sig_x = torch.mm((X - mu_x).transpose(0, 1), (X - mu_x)) / X.size(0)
+            sig_y = torch.mm((Y - mu_y).transpose(0, 1), (Y - mu_y)) / Y.size(0)
+            sig_d = torch.abs(sig_x - sig_y).mean()
+            ell += sig_d
 
     return ell
 
